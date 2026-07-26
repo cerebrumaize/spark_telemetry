@@ -42,6 +42,44 @@ follow Redpanda docker compose labs recommendation and picked the one using sing
 
 as I set console is `http://localhost:8080`, I can view the json msg queued to the topic
 
-The topic is made with 3 partitions.
+The topic is made with 3 partitions because:
+- 大于 1，才能演示 key 到分区的哈希分配。单分区的话所有消息都在一个地方，看不出 keyed 的效果
+- 小到本地跑得动，Console 里三个分区一眼扫完
+- 后面 Spark 的并行度会对齐分区数，3 个 task 足够演示又不会把笔记本压垮
 
 rpk topic consume 默认不提交 consumer group offset, 不会影响真正的consuemrs
+
+# steps
+->: docker compose up -d # start the docker services
+->: python producer/replay.py # test replay
+
+topic 是持久追加的,one manual test message which not follows the msg format in CMAPSSData caused key value err,schema 不一致。即使在console读过, 也不会清楚, 且console consume不移动offset
+这正是 phase 1 计划里 Protobuf + schema registry 要解决的问题. 有了 schema 校验,那条 engine_id 格式的消息根本进不来。
+![alt text](./images/manual_msg.png)
+
+# day 2
+producer __init__.py and replay.py
+
+## verifications 1, all units of the same key falls into the same partitions
+## vf2, event_time increase as cycle inscreases
+## vf3, check total count adds up to 20631 (8725+7894+4012)
+```bash
+╰─❯ docker exec -it redpanda-0 rpk topic consume sensor.raw -p 0 --offset start -n 5 -f '%k\n'
+7
+7
+7
+7
+7
+...
+╰─❯ docker exec -it redpanda-0 rpk topic consume sensor.raw --offset start -n 3 \
+  -f '%v\n' | python -c "import sys,json; [print(json.loads(l)['unit_number'], json.loads(l)['time_in_cycles'], json.loads(l)['event_time']) for l in sys.stdin]"
+1 1 1785007501000
+1 2 1785007502000
+1 3 1785007503000
+...
+╰─❯ docker exec -it redpanda-0 rpk topic describe sensor.raw -p
+PARTITION  LEADER  EPOCH  REPLICAS  LOG-START-OFFSET  HIGH-WATERMARK
+0          0       1      [0]       0                 8725
+1          0       1      [0]       0                 7894
+2          0       1      [0]       0                 4012
+```
