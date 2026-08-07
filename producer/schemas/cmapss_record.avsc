@@ -1,0 +1,118 @@
+{
+  "type": "record",
+  "name": "CMAPSSRecord",
+  "namespace": "telemetry",
+  "fields": [
+    {
+      "name": "event_time",
+      "type": {
+        "type": "long",
+        "logicalType": "timestamp-millis"
+      }
+    },
+    {
+      "name": "unit_number",
+      "type": "int"
+    },
+    {
+      "name": "time_in_cycles",
+      "type": "int"
+    },
+    {
+      "name": "setting1",
+      "type": "double"
+    },
+    {
+      "name": "setting2",
+      "type": "double"
+    },
+    {
+      "name": "setting3",
+      "type": "double"
+    },
+    {
+      "name": "sensor1",
+      "type": "double"
+    },
+    {
+      "name": "sensor2",
+      "type": "double"
+    },
+    {
+      "name": "sensor3",
+      "type": "double"
+    },
+    {
+      "name": "sensor4",
+      "type": "double"
+    },
+    {
+      "name": "sensor5",
+      "type": "double"
+    },
+    {
+      "name": "sensor6",
+      "type": "double"
+    },
+    {
+      "name": "sensor7",
+      "type": "double"
+    },
+    {
+      "name": "sensor8",
+      "type": "double"
+    },
+    {
+      "name": "sensor9",
+      "type": "double"
+    },
+    {
+      "name": "sensor10",
+      "type": "double"
+    },
+    {
+      "name": "sensor11",
+      "type": "double"
+    },
+    {
+      "name": "sensor12",
+      "type": "double"
+    },
+    {
+      "name": "sensor13",
+      "type": "double"
+    },
+    {
+      "name": "sensor14",
+      "type": "double"
+    },
+    {
+      "name": "sensor15",
+      "type": "double"
+    },
+    {
+      "name": "sensor16",
+      "type": "double"
+    },
+    {
+      "name": "sensor17",
+      "type": "double"
+    },
+    {
+      "name": "sensor18",
+      "type": "double"
+    },
+    {
+      "name": "sensor19",
+      "type": "double"
+    },
+    {
+      "name": "sensor20",
+      "type": "double"
+    },
+    {
+      "name": "sensor21",
+      "type": "double"
+    }
+  ]
+}

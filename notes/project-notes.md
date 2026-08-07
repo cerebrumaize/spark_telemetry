@@ -9,6 +9,8 @@ unit, cycle, op_setting 1/2/3, sensor_1/2/.../21
 
 20631 rows altogether
 
+sensor1 是风扇入口温度,sensor2 是低压压缩机出口温度……它们语义各不相同、单位不同、
+
 Unique value count per column
 col unit_number: 100 unique values
 col time_in_cycles: 362 unique values
@@ -50,8 +52,10 @@ The topic is made with 3 partitions because:
 rpk topic consume 默认不提交 consumer group offset, 不会影响真正的consuemrs
 
 # steps
-->: docker compose up -d # start the docker services
-->: python producer/replay.py # test replay
+```
+─❯ docker compose up -d # start the docker services
+─❯ python producer/replay.py # test replay
+```
 
 topic 是持久追加的,one manual test message which not follows the msg format in CMAPSSData caused key value err,schema 不一致。即使在console读过, 也不会清楚, 且console consume不移动offset
 这正是 phase 1 计划里 Protobuf + schema registry 要解决的问题. 有了 schema 校验,那条 engine_id 格式的消息根本进不来。
@@ -83,3 +87,8 @@ PARTITION  LEADER  EPOCH  REPLICAS  LOG-START-OFFSET  HIGH-WATERMARK
 1          0       1      [0]       0                 7894
 2          0       1      [0]       0                 4012
 ```
+
+# todo
+
+- Add `--chaos`
+- 坏数据拦截验证

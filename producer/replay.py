@@ -1,10 +1,14 @@
-import time
+import optparse
 import json
-from confluent_kafka import Producer
 from pathlib import Path
+from confluent_kafka import SerializingProducer
+from confluent_kafka.serialization import StringSerializer
+from confluent_kafka.schema_registry import SchemaRegistryClient
+from confluent_kafka.schema_registry.avro import AvroSerializer
 
 DATA_PATH = Path(__file__).parent.parent / "data" / "CMAPSSData" /"train_FD001.txt"
 BASE_EPOCH_MS = 1_785_007_500_000  # 2026-07-25 12:25:00 UTC in milliseconds
+
 def delivery_report(err, msg):
     if err is not None:
         print(f"❌ Delivery failed for record {msg.key()}: {err}")
@@ -16,9 +20,11 @@ def build_event_time(cycle, interval_ms):
 
 def parse_line_to_record(line, interval_ms=1000):
     """ one record in train_FD001:
-    #1 1 -0.0007 -0.0004 100.0 518.67 641.82 1589.70 1400.60 14.62 21.61 
-    #554.36 2388.06 9046.19 1.30 47.47 521.66 2388.02 8138.62 8.4195 0.03 392
-    #2388 100.00 39.06 23.4190  
+    # 1 1  # unit_number, time_in_cycles
+    # -0.0007 -0.0004 100.0  # setting1, setting2, setting3
+    # 518.67 641.82 1589.70 1400.60 14.62 21.61 554.36 2388.06 9046.19 1.30
+    # 47.47 521.66 2388.02 8138.62 8.4195 0.03 392 2388 100.00 39.06
+    # 23.4190  
     """
     sensor_name = [
         "sensor1", "sensor2", "sensor3", "sensor4", "sensor5", "sensor6", "sensor7",
@@ -43,20 +49,32 @@ def parse_line_to_record(line, interval_ms=1000):
     return record
 
 def main():
-    producer_config = {
-        "bootstrap.servers": "localhost:19092"
-    }
+    schema_registry_conf = {"url": "http://localhost:18081"}  # host 从宿主机连
+    sr_client = SchemaRegistryClient(schema_registry_conf)
+    schema_str = (Path(__file__).parent / "schemas" / "cmapss_record.avsc").read_text()
 
-    producer = Producer(producer_config)
+    avro_serializer = AvroSerializer(
+        sr_client,
+        schema_str,                      # sensor_reading.avsc 的内容
+        lambda obj, ctx: obj,            # record already a dict, pass through
+    )
+    string_serializer = StringSerializer("utf_8")
+    
+    producer = SerializingProducer({
+        "bootstrap.servers": "localhost:19092",
+        "key.serializer": string_serializer,
+        "value.serializer": avro_serializer
+    })
+
     with open(DATA_PATH, "r") as f:
         for line in f:
             record = parse_line_to_record(line)
-            value = json.dumps(record).encode("utf-8")
             producer.produce(
                 topic="sensor.raw",
-                key=str(record["unit_number"]).encode("utf-8"),
-                value=value,
-                callback=delivery_report,
+                key=str(record["unit_number"]),  # raw str, serializer handles bytes
+                value=record,                    # raw dict, avro serializer handles it
+                # callback=delivery_report,
+                on_delivery=delivery_report,     # note: on_delivery, not callback
             )
             producer.poll(0)  # Trigger delivery report callbacks
     producer.flush()
