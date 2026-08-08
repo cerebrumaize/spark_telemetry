@@ -1,7 +1,8 @@
-import optparse
 import json
 from pathlib import Path
-from confluent_kafka import SerializingProducer
+import time
+from confluent_kafka import SerializingProducer, Producer
+from confluent_kafka.error import ValueSerializationError
 from confluent_kafka.serialization import StringSerializer
 from confluent_kafka.schema_registry import SchemaRegistryClient
 from confluent_kafka.schema_registry.avro import AvroSerializer
@@ -48,6 +49,21 @@ def parse_line_to_record(line, interval_ms=1000):
 
     return record
 
+def to_dlq(dlq_producer, line_num, raw, error, stage):
+    dlq_record = {
+        "line_num": line_num,
+        "raw_line": raw,
+        "error": str(error),
+        "stage": stage,
+        "processed_time": int(time.time() * 1000)  # current time in milliseconds
+    }
+    dlq_producer.produce(
+        topic="sensor.raw.dlq",
+        key=str(line_num),
+        value=json.dumps(dlq_record).encode("utf-8"),
+        on_delivery=delivery_report,
+    )
+
 def main():
     schema_registry_conf = {"url": "http://localhost:18081"}  # host 从宿主机连
     sr_client = SchemaRegistryClient(schema_registry_conf)
@@ -65,19 +81,35 @@ def main():
         "key.serializer": string_serializer,
         "value.serializer": avro_serializer
     })
-
+    dlq_producer = Producer({"bootstrap.servers": "localhost:19092"})
     with open(DATA_PATH, "r") as f:
-        for line in f:
-            record = parse_line_to_record(line)
-            producer.produce(
-                topic="sensor.raw",
-                key=str(record["unit_number"]),  # raw str, serializer handles bytes
-                value=record,                    # raw dict, avro serializer handles it
-                # callback=delivery_report,
-                on_delivery=delivery_report,     # note: on_delivery, not callback
-            )
+        for line_num, line in enumerate(f, start=1):
+            # layer 1: parse line to record
+            try:
+                record = parse_line_to_record(line)
+                # record["unit_number"] = str(record["unit_number"])  # convert to str to test avro
+            except (ValueError, IndexError) as e:
+                to_dlq(dlq_producer, line_num, line.strip(), e, stage="parse")
+                continue
+
+            # layer 2: avro serilize + append to kafka
+            try:
+                producer.produce(
+                    topic="sensor.raw",
+                    key=str(record["unit_number"]),  # raw str, serializer handles bytes
+                    value=record,                    # raw dict, avro serializer handles it
+                    # callback=delivery_report,
+                    on_delivery=delivery_report,     # note: on_delivery, not callback
+                )
+            except ValueSerializationError as e:
+                to_dlq(dlq_producer, line_num, line.strip(), e, stage="serialize")
+                continue
+
             producer.poll(0)  # Trigger delivery report callbacks
+            dlq_producer.poll(0)  # Trigger delivery report callbacks for DLQ producer
+
     producer.flush()
+    dlq_producer.flush()
 
 if __name__ == "__main__":
     main()
