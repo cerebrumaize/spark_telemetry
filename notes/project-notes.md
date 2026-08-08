@@ -88,6 +88,12 @@ PARTITION  LEADER  EPOCH  REPLICAS  LOG-START-OFFSET  HIGH-WATERMARK
 2          0       1      [0]       0                 4012
 ```
 
+# day 3
+- chose Avro over protobuf as it works well with Spark
+- replace Producer with SerializingProducer
+- replace manual json dump as the SerializingProducer knows the table schema by using .avsc file
+
+
 # todo
 
 - Add `--chaos`

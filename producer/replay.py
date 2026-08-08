@@ -44,7 +44,7 @@ def parse_line_to_record(line, interval_ms=1000):
         "setting3": float(values[4]),
     }
     for i, name in enumerate(sensor_name):
-            record[name] = float(values[i+5])
+        record[name] = float(values[i+5])
 
     return record
 
