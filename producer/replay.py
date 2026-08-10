@@ -1,3 +1,4 @@
+import argparse
 import json
 from pathlib import Path
 import time
@@ -19,7 +20,7 @@ def delivery_report(err, msg):
 def build_event_time(cycle, interval_ms):
     return BASE_EPOCH_MS + cycle * interval_ms
 
-def parse_line_to_record(line, interval_ms=1000):
+def parse_line_to_record(line, interval_ms):
     """ one record in train_FD001:
     # 1 1  # unit_number, time_in_cycles
     # -0.0007 -0.0004 100.0  # setting1, setting2, setting3
@@ -64,7 +65,7 @@ def to_dlq(dlq_producer, line_num, raw, error, stage):
         on_delivery=delivery_report,
     )
 
-def main():
+def main(speed, interval_ms):
     schema_registry_conf = {"url": "http://localhost:18081"}  # host 从宿主机连
     sr_client = SchemaRegistryClient(schema_registry_conf)
     schema_str = (Path(__file__).parent / "schemas" / "cmapss_record.avsc").read_text()
@@ -82,34 +83,55 @@ def main():
         "value.serializer": avro_serializer
     })
     dlq_producer = Producer({"bootstrap.servers": "localhost:19092"})
+    records = []
+    # read in the data file and sort by event_time
     with open(DATA_PATH, "r") as f:
         for line_num, line in enumerate(f, start=1):
             # layer 1: parse line to record
             try:
-                record = parse_line_to_record(line)
+                record = parse_line_to_record(line, interval_ms)
                 # record["unit_number"] = str(record["unit_number"])  # convert to str to test avro
+                records.append((record, line_num, line.strip()))
             except (ValueError, IndexError) as e:
                 to_dlq(dlq_producer, line_num, line.strip(), e, stage="parse")
                 continue
+    records.sort(key=lambda rec: rec[0]["event_time"])  # sort by event_time
 
-            # layer 2: avro serilize + append to kafka
-            try:
-                producer.produce(
-                    topic="sensor.raw",
-                    key=str(record["unit_number"]),  # raw str, serializer handles bytes
-                    value=record,                    # raw dict, avro serializer handles it
-                    # callback=delivery_report,
-                    on_delivery=delivery_report,     # note: on_delivery, not callback
-                )
-            except ValueSerializationError as e:
-                to_dlq(dlq_producer, line_num, line.strip(), e, stage="serialize")
-                continue
+    # replay with wall-clock pacing
+    prev_event_time = None
+    for record, line_num, raw_line in records:
+        if prev_event_time is not None:
+            delay_s = (record["event_time"] - prev_event_time) / 1000.0 / speed
 
-            producer.poll(0)  # Trigger delivery report callbacks
-            dlq_producer.poll(0)  # Trigger delivery report callbacks for DLQ producer
+            if delay_s > 0:
+                time.sleep(delay_s)
+        prev_event_time = record["event_time"]
+
+        # layer 2: avro serilize + append to kafka
+        try:
+            producer.produce(
+                topic="sensor.raw",
+                key=str(record["unit_number"]),  # raw str, serializer handles bytes
+                value=record,                    # raw dict, avro serializer handles it
+                # callback=delivery_report,
+                on_delivery=delivery_report,     # note: on_delivery, not callback
+            )
+        except ValueSerializationError as e:
+            to_dlq(dlq_producer, line_num, raw_line, e, stage="serialize")
+            continue
+
+        producer.poll(0)  # Trigger delivery report on_delivery
+        dlq_producer.poll(0)  # Trigger delivery report on_delivery for DLQ producer
 
     producer.flush()
     dlq_producer.flush()
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(
+        prog="replay_cmapss",
+        description="Replay CMAPSS data to Kafka with wall-clock pacing.")
+    parser.add_argument("--speed", type=float, default=1.0)
+    parser.add_argument("--interval-ms", type=int, default=1000)
+    args = parser.parse_args()
+
+    main(args.speed, args.interval_ms)

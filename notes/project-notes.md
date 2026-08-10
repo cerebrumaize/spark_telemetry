@@ -1,5 +1,6 @@
-# train_FD001 raw
-Top 3 rows in train_FD001.txt
+# understand train_FD001 raw
+
+## Top 3 rows in train_FD001.txt
 unit, cycle, op_setting 1/2/3, sensor_1/2/.../21
 ```
 1	1	-0.0007	-0.0004	100.0	518.67	641.82	1589.70	1400.60	14.62	21.61	554.36	2388.06	9046.19	1.3	47.47	521.66	2388.02	8138.62	8.4195	0.03	392	2388	100.0	39.06	23.4190	NaN	NaN
@@ -7,6 +8,10 @@ unit, cycle, op_setting 1/2/3, sensor_1/2/.../21
 1	3	-0.0043	0.0003	100.0	518.67	642.35	1587.99	1404.20	14.62	21.61	554.26	2388.08	9052.94	1.3	47.27	522.42	2388.03	8133.23	8.4178	0.03	390	2388	100.0	38.95	23.3442	NaN	NaN
 ```
 
+## what is cycle
+cycle/time_in_cycles means the event_time in the real world. So unit 1 and 2 they sent out signals at the same time cycle=1 (BASE+cycle*interval)
+
+## misc.
 20631 rows altogether
 
 sensor1 是风扇入口温度,sensor2 是低压压缩机出口温度……它们语义各不相同、单位不同、
@@ -88,13 +93,26 @@ PARTITION  LEADER  EPOCH  REPLICAS  LOG-START-OFFSET  HIGH-WATERMARK
 2          0       1      [0]       0                 4012
 ```
 
+
 # day 3
 - chose Avro over protobuf as it works well with Spark
 - replace Producer with SerializingProducer
 - replace manual json dump as the SerializingProducer knows the table schema by using .avsc file
 
 
+# day 4
+
+## 坏数据拦截. add DLQ topic
+
+1. parse 层抓格式坏("wrong" 转不成数),stage=parse；Avro 层抓类型不符(str 冒充 long),stage=serialize。两个 traceback 长得完全不同,前者是 ValueError,后者是 fastavro 的 ValueSerializationError。
+
+2. 加了 DLQ 后同样的坏行只是被隔离,其余照常, o.w. the whole replay.py fails without these try catch blocks
+
+3. DLQ 用 1 分区(坏数据量小、不需并行不需 keyed)、DLQ 走 JSON 明文(给人看的、不该套 Avro)、DLQ record 带 line_num/stage/ts 做诊断上下文。这些选择本身都是可讲的判断。
+
+4. confluent-kafka 的 callback 和 on_delivery 是同义参数，SerializingProducer 文档用on_delivery,两个 producer 统一用 on_delivery
+
+
 # todo
 
 - Add `--chaos`
-- 坏数据拦截验证
