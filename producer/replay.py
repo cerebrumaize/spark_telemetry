@@ -1,12 +1,14 @@
-import argparse
+import argparse, itertools
 import json
 from pathlib import Path
+import random
 import time
 from confluent_kafka import SerializingProducer, Producer
 from confluent_kafka.error import ValueSerializationError
 from confluent_kafka.serialization import StringSerializer
 from confluent_kafka.schema_registry import SchemaRegistryClient
 from confluent_kafka.schema_registry.avro import AvroSerializer
+import heapq
 
 DATA_PATH = Path(__file__).parent.parent / "data" / "CMAPSSData" /"train_FD001.txt"
 BASE_EPOCH_MS = 1_785_007_500_000  # 2026-07-25 12:25:00 UTC in milliseconds
@@ -65,7 +67,18 @@ def to_dlq(dlq_producer, line_num, raw, error, stage):
         on_delivery=delivery_report,
     )
 
-def main(speed, interval_ms):
+def main(args):
+    speed = args.speed
+    interval_ms = args.interval_ms
+    chaos = args.chaos
+    chaos_late_rate = float(args.late_rate) if chaos else 0.0
+    chaos_late_max_ms = int(args.late_max_ms) if chaos else 0
+    chaos_dup_rate = float(args.dup_rate) if chaos else 0.0
+    chaos_corrupt_rate = float(args.corrupt_rate) if chaos else 0.0
+    chaos_seed = int(args.seed) if chaos else 0
+
+    counter = itertools.count()  # for tie-breaking in heapq
+
     schema_registry_conf = {"url": "http://localhost:18081"}  # host 从宿主机连
     sr_client = SchemaRegistryClient(schema_registry_conf)
     schema_str = (Path(__file__).parent / "schemas" / "cmapss_record.avsc").read_text()
@@ -83,7 +96,12 @@ def main(speed, interval_ms):
         "value.serializer": avro_serializer
     })
     dlq_producer = Producer({"bootstrap.servers": "localhost:19092"})
+
     records = []
+    t0_event_ms = BASE_EPOCH_MS + interval_ms  # because I know the min event_time is cycle 1
+    t0_wall_ms = int(time.time() * 1000) # when program starts, in milliseconds
+    rand = random.Random(chaos_seed)  # for reproducibility
+
     # read in the data file and sort by event_time
     with open(DATA_PATH, "r") as f:
         for line_num, line in enumerate(f, start=1):
@@ -91,21 +109,23 @@ def main(speed, interval_ms):
             try:
                 record = parse_line_to_record(line, interval_ms)
                 # record["unit_number"] = str(record["unit_number"])  # convert to str to test avro
-                records.append((record, line_num, line.strip()))
+                normal_send_wall = t0_wall_ms + (record["event_time"] - t0_event_ms) / speed
+                if rand.random() < chaos_late_rate:
+                    actual_send_wall = normal_send_wall + (rand.randint(0, chaos_late_max_ms) / speed)
+                else:
+                    actual_send_wall = normal_send_wall
+                records.append((actual_send_wall, next(counter), record, line_num, line.strip()))
             except (ValueError, IndexError) as e:
                 to_dlq(dlq_producer, line_num, line.strip(), e, stage="parse")
                 continue
-    records.sort(key=lambda rec: rec[0]["event_time"])  # sort by event_time
+    heapq.heapify(records)  # sort by actual_send_wall, tiebreaker
 
     # replay with wall-clock pacing
-    prev_event_time = None
-    for record, line_num, raw_line in records:
-        if prev_event_time is not None:
-            delay_s = (record["event_time"] - prev_event_time) / 1000.0 / speed
-
-            if delay_s > 0:
-                time.sleep(delay_s)
-        prev_event_time = record["event_time"]
+    while records:
+        actual_send_wall, tie_breaker, record, line_num, raw_line = heapq.heappop(records)
+        delay_s = actual_send_wall - time.time() * 1000
+        if delay_s > 0:
+            time.sleep(delay_s / 1000.0) # sleep expects seconds
 
         # layer 2: avro serilize + append to kafka
         try:
@@ -113,7 +133,6 @@ def main(speed, interval_ms):
                 topic="sensor.raw",
                 key=str(record["unit_number"]),  # raw str, serializer handles bytes
                 value=record,                    # raw dict, avro serializer handles it
-                # callback=delivery_report,
                 on_delivery=delivery_report,     # note: on_delivery, not callback
             )
         except ValueSerializationError as e:
@@ -132,6 +151,14 @@ if __name__ == "__main__":
         description="Replay CMAPSS data to Kafka with wall-clock pacing.")
     parser.add_argument("--speed", type=float, default=1.0)
     parser.add_argument("--interval-ms", type=int, default=1000)
+
+    parser.add_argument("--chaos", action="store_true")   # 不加chaos就默认False,加了--chaos就是True
+    parser.add_argument("--late-rate", type=float, default=0.0)
+    parser.add_argument("--late-max-ms", type=int, default=0)
+    parser.add_argument("--dup-rate", type=float, default=0.0)
+    parser.add_argument("--corrupt-rate", type=float, default=0.0)
+    parser.add_argument("--seed", type=int, default=0)
+
     args = parser.parse_args()
 
-    main(args.speed, args.interval_ms)
+    main(args)
