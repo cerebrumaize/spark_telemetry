@@ -1,3 +1,4 @@
+import copy
 import argparse, itertools
 import json
 from pathlib import Path
@@ -109,12 +110,22 @@ def main(args):
             try:
                 record = parse_line_to_record(line, interval_ms)
                 # record["unit_number"] = str(record["unit_number"])  # convert to str to test avro
+
+                # late events manipulation
                 normal_send_wall = t0_wall_ms + (record["event_time"] - t0_event_ms) / speed
-                if rand.random() < chaos_late_rate:
+                if chaos and rand.random() <= chaos_late_rate:
                     actual_send_wall = normal_send_wall + (rand.randint(0, chaos_late_max_ms) / speed)
                 else:
                     actual_send_wall = normal_send_wall
+
+                # duplicate events injection
+                if chaos and rand.random() <= chaos_dup_rate:
+                    dup_send_wall = actual_send_wall + (rand.randint(0, 100) / speed) # small delay for duplicates
+                    records.append((dup_send_wall, next(counter), record, line_num, line.strip()))
+
+                # normal events injection
                 records.append((actual_send_wall, next(counter), record, line_num, line.strip()))
+
             except (ValueError, IndexError) as e:
                 to_dlq(dlq_producer, line_num, line.strip(), e, stage="parse")
                 continue
@@ -123,9 +134,13 @@ def main(args):
     # replay with wall-clock pacing
     while records:
         actual_send_wall, tie_breaker, record, line_num, raw_line = heapq.heappop(records)
-        delay_s = actual_send_wall - time.time() * 1000
-        if delay_s > 0:
-            time.sleep(delay_s / 1000.0) # sleep expects seconds
+        delay_ms = actual_send_wall - time.time() * 1000
+        if delay_ms > 0:
+            time.sleep(delay_ms / 1000.0) # sleep expects seconds
+
+        if chaos and rand.random() <= chaos_corrupt_rate:
+            record = copy.deepcopy(record)  # make a copy to avoid mutating the original
+            record["unit_number"] = str(record["unit_number"]) + "_corrupt"  # corrupt the unit_number to test avro serialization error
 
         # layer 2: avro serilize + append to kafka
         try:

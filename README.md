@@ -53,6 +53,9 @@ PARTITION  LEADER  EPOCH  REPLICAS  LOG-START-OFFSET  HIGH-WATERMARK
 4. confluent-kafka 的 callback 和 on_delivery 是同义参数，SerializingProducer 文档用on_delivery,两个 producer 统一用 on_delivery
 
 
-# todo
+# day 5
+Add chaos, late-rate, late-max-ms to control late events ratio and max delay time
 
-- Add `--chaos`
+
+# lessons
+紊乱作用在副本上，原始不可变。Esp. for duplicated record, original and dup one are referencing the same object. do a deepcopy
